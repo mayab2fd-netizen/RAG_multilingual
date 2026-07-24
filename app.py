@@ -9,9 +9,9 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 # 페이지 설정
-st.set_page_config(page_title="PDF 다국어 RAG & 번역기", page_icon="📄", layout="wide")
-st.title("📄 PDF 다국어 질의응답 & 번역기")
-st.markdown("PDF 문서를 업로드하고 질문을 입력하면, RAG를 활용해 문서 기반 답변을 원하는 언어로 제공합니다.")
+st.set_page_config(page_title="AI 글로벌 계약서 분석기", page_icon="⚖️", layout="wide")
+st.title("⚖️ AI 글로벌 계약서 & 법률 문서 분석기")
+st.markdown("영문/다국어 계약서를 업로드하고 질문해보세요. AI가 조항 분석, 위약금, 계약 기간 등 핵심 내용을 찾아 번역해 줍니다.")
 
 # 세션 상태 초기화
 if "messages" not in st.session_state:
@@ -36,6 +36,11 @@ def process_pdf(uploaded_file, api_key):
             pdf_doc.close()
         except Exception:
             st.error("파일을 읽을 수 없거나 암호가 걸려 있습니다. 정상적인 PDF 파일인지 확인해주세요.")
+            return None
+
+        # 텍스트 추출 결과가 비어있는 경우 (이미지 스캔본 PDF 등)
+        if not text.strip():
+            st.error("PDF에서 텍스트를 추출할 수 없습니다. 이미지 스캔본이 아닌 텍스트 기반 PDF를 업로드해주세요.")
             return None
 
         # 2. 텍스트 청크 분할
@@ -84,7 +89,7 @@ for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
 # 사용자 질문 입력란
-if query := st.chat_input("질문이나 번역 요청을 입력하세요. (예: 월 보험료가 얼마인지 알려줘)"):
+if query := st.chat_input("계약서 내용에 대해 질문해주세요. (예: 지각 시 위약금 조항이 어떻게 돼? 계약 해지 조건은 뭐야?)"):
     # 사용자 질문 화면에 표시
     st.session_state.messages.append({"role": "user", "content": query})
     st.chat_message("user").write(query)
@@ -96,40 +101,44 @@ if query := st.chat_input("질문이나 번역 요청을 입력하세요. (예: 
     else:
         with st.chat_message("assistant"):
             with st.spinner("문서에서 정답을 찾아 번역하는 중입니다..."):
-                # 1. 유사도 검색 (k=5로 설정하여 컨텍스트 길이 최적화)
-                vectorstore = st.session_state.vectorstore
-                docs = vectorstore.similarity_search_with_score(query, k=5)
+                try:
+                    # 1. 유사도 검색 (k=5로 설정하여 컨텍스트 길이 최적화)
+                    vectorstore = st.session_state.vectorstore
+                    docs = vectorstore.similarity_search_with_score(query, k=5)
 
-                context = ""
-                for doc, score in docs:
-                    context += doc.page_content + "\n\n"
+                    context = ""
+                    for doc, score in docs:
+                        context += doc.page_content + "\n\n"
 
-                # 2. LLM 및 프롬프트 체인 구성
-                # 답변을 사용자가 선택한 언어로 강제하는 프롬프트 사용
-                llm = ChatOpenAI(api_key=openai_api_key, model="gpt-4o", temperature=0)
+                    # 2. LLM 및 프롬프트 체인 구성
+                    # 답변을 사용자가 선택한 언어로 강제하는 프롬프트 사용
+                    llm = ChatOpenAI(api_key=openai_api_key, model="gpt-4o", temperature=0)
 
-                template = """다음 제공된 배경 지식을 바탕으로 사용자 질문에 답변해주세요.
-                만약 배경 지식에 질문에 대한 답이 없다면, '문서에서 해당 내용을 찾을 수 없습니다'라고 답변하세요.
+                    template = """당신은 글로벌 계약서 및 법률 문서를 전문적으로 분석하는 AI 법무 검토관입니다.
+                    다음 제공된 계약서/법률 문서의 내용을 바탕으로 사용자 질문에 정확하고 객관적으로 답변해주세요.
+                    만약 문서에 질문에 대한 답이 명확히 없다면, 추측하지 말고 '문서에서 해당 조항을 찾을 수 없습니다'라고 답변하세요.
 
-                중요: 답변은 반드시 **{language}**로 작성하고 번역해야 합니다.
+                    중요: 답변은 반드시 **{language}**로 작성하고 번역해야 합니다. 중요한 법률/계약 용어는 원문을 괄호 안에 병기하고 이해하기 쉽게 설명해주세요.
 
-                [배경지식]
-                {context}
+                    [계약서/문서 내용]
+                    {context}
 
-                [사용자 질문]
-                {question}"""
+                    [사용자 질문]
+                    {question}"""
 
-                prompt = ChatPromptTemplate.from_template(template)
-                chain = prompt | llm | StrOutputParser()
+                    prompt = ChatPromptTemplate.from_template(template)
+                    chain = prompt | llm | StrOutputParser()
 
-                # 3. 답변 생성
-                response = chain.invoke({
-                    "context": context,
-                    "question": query,
-                    "language": target_language
-                })
+                    # 3. 답변 생성 및 세션 저장
+                    response = chain.invoke({
+                        "context": context,
+                        "question": query,
+                        "language": target_language
+                    })
 
-                st.write(response)
+                    st.write(response)
+                    # 어시스턴트 답변 세션에 저장 (response가 정상적으로 생성된 경우에만 저장)
+                    st.session_state.messages.append({"role": "assistant", "content": response})
 
-        # 어시스턴트 답변 세션에 저장
-        st.session_state.messages.append({"role": "assistant", "content": response})
+                except Exception as e:
+                    st.error(f"답변 생성 중 오류가 발생했습니다: {e}")
